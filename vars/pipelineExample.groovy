@@ -5,67 +5,45 @@ def call(body) {
     body.delegate = config
     body()
 
-    // Задаем значения по умолчанию для параметров
-    def dockerHubCreds = config.dockerHubCredentials ?: 'docker-hub-creds'
-    def githubCreds = config.githubCredentials ?: 'github-credentials'
-    def imageName = config.imageName ?: 'midzaru2011/coffeeandtea'
-    def imageTag = config.imageTag ?: "v${env.BUILD_NUMBER}"
-    def mavenTool = config.mavenTool ?: 'Maven-3.9.9'
-    def gitUrl = config.gitUrl ?: 'https://github.com/Midzaru2011/CoffeeAndTea.git'
-    def gitBranch = config.gitBranch ?: 'master'
+    // Вызываем функцию для настройки параметров
+    def parameters = configureParameters(config)
 
-    pipeline {
-        agent any
+    // Устанавливаем переменные окружения
+    env.DOCKER_HUB_CREDENTIALS = credentials(parameters.dockerHubCredentials)
+    env.IMAGE_NAME = parameters.imageName
+    env.IMAGE_TAG = parameters.imageTag
+    env.GITHUB_CREDENTIALS = parameters.githubCredentials
 
-        environment {
-            DOCKER_HUB_CREDENTIALS = credentials(dockerHubCreds)
-            IMAGE_NAME = imageName
-            IMAGE_TAG = imageTag
-            GITHUB_CREDENTIALS = githubCreds
-        }
-
-        tools {
-            maven mavenTool
-        }
-
-        stages {
+    node {
+        try {
             stage('Delete workspace') {
-                steps {
-                    echo 'Deleting workspace'
-                    deleteDir()
-                }
+                echo 'Deleting workspace'
+                deleteDir()
             }
 
             stage('Checkout') {
-                steps {
-                    git branch: gitBranch,
-                        credentialsId: env.GITHUB_CREDENTIALS,
-                        url: gitUrl
-                }
+                checkoutCode(
+                    gitUrl: parameters.gitUrl,
+                    gitBranch: parameters.gitBranch,
+                    githubCredentials: env.GITHUB_CREDENTIALS
+                )
+            }
+
+            stage('Prepare Dockerfile') {
+                prepareDockerfile()
             }
 
             stage('Build Docker Image') {
-                steps {
-                    script {
-                        docker.build("${IMAGE_NAME}:${IMAGE_TAG}")
-                    }
-                }
+                buildDockerImage(env.IMAGE_NAME, env.IMAGE_TAG)
             }
 
             stage('Push Docker Image') {
-                steps {
-                    script {
-                        docker.withRegistry('https://registry.hub.docker.com', dockerHubCreds) {
-                            docker.image("${IMAGE_NAME}:${IMAGE_TAG}").push()
-                        }
-                    }
-                }
+                pushDockerImage(env.IMAGE_NAME, env.IMAGE_TAG, env.DOCKER_HUB_CREDENTIALS)
             }
-        }
-
-        post {
-            always {
-                cleanWs() // Очищает workspace
+        } finally {
+            stage('Cleanup') {
+                echo 'Cleaning up workspace'
+                cleanWs()
             }
         }
     }
